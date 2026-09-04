@@ -1,0 +1,1245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Per-Character Text Animation — Synfig · GSoC 2026</title>
+<meta name="description" content="Artist guide, architecture, and developer reference for native per-character text animation in Synfig Studio — GSoC 2026.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,340;0,9..144,440;0,9..144,560;0,9..144,680;1,9..144,440;1,9..144,560&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   TOKENS
+   ============================================================ */
+:root{
+  --cream:  #FBE4D8;
+  --blush:  #DFB6B2;
+  --dust:   #854F6C;
+  --mauve:  #522B5B;
+  --plum:   #2B124C;
+  --ink:    #130c1e;
+
+  --serif: "Fraunces", Georgia, serif;
+  --sans:  "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono:  "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+
+  --maxw: 760px;
+  --pad: clamp(20px, 5vw, 56px);
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+html{ scroll-behavior:smooth; }
+@media (prefers-reduced-motion: reduce){
+  html{ scroll-behavior:auto; }
+  *,*::before,*::after{ animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition-duration:0.001ms !important; }
+}
+
+body{
+  margin:0;
+  font-family:var(--sans);
+  color:var(--ink);
+  line-height:1.6;
+
+  background:linear-gradient(
+    to bottom,
+    #130c1e 0%,
+    #130c1e 24%,
+    var(--plum) 40%,
+    var(--plum) 56%,
+    var(--mauve) 68%,
+    var(--mauve) 80%,
+    var(--dust) 90%,
+    var(--blush) 96%,
+    var(--cream) 100%
+  );
+  background-attachment: scroll;
+  overflow-x:hidden;
+}
+
+img,svg{ display:block; max-width:100%; }
+a{ color:inherit; }
+h1,h2,h3,h4{ font-family:var(--serif); font-weight:560; margin:0; letter-spacing:-0.01em; }
+p{ margin:0 0 1em; }
+p:last-child{ margin-bottom:0; }
+code, .mono{ font-family:var(--mono); }
+.visually-hidden{ position:absolute; width:1px;height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+
+
+.thread{
+  position:fixed; left:26px; top:0; bottom:0; width:2px;
+  background:rgba(251,228,216,0.18);
+  z-index:5; display:none;
+}
+.thread::after{
+  content:""; position:absolute; left:0; top:0; width:100%;
+  height:var(--thread-progress, 0%);
+  background:linear-gradient(to bottom, var(--dust), var(--mauve));
+  box-shadow:0 0 8px rgba(133,79,108,0.5);
+  transition:height 60ms linear;
+}
+@media (min-width:1080px){ .thread{ display:block; } }
+
+.site-nav{
+  position:fixed; top:0; left:0; bottom:0; width:228px; z-index:50;
+  display:flex; flex-direction:column; align-items:stretch;
+  padding:28px 20px;
+  background:rgba(19,12,30,0.97);
+  border-right:1px solid rgba(251,228,216,0.07);
+  transform:translateX(-100%);
+  transition:transform 180ms ease;
+}
+.site-nav.open{ transform:translateX(0); }
+.site-nav .brand{ display:none; }
+.nav-links{
+  display:flex; flex-direction:column; gap:0; list-style:none; margin:0; padding:0;
+}
+.nav-links a{
+  display:block; color:rgba(251,228,216,0.68); text-decoration:none; font-size:0.84rem;
+  font-weight:500; letter-spacing:0.01em; transition:color 150ms ease, padding-left 150ms ease;
+  padding:8px 0; border-bottom:0;
+}
+.nav-links a:hover, .nav-links a.active{ color:var(--cream); padding-left:4px; }
+.nav-toggle{
+  position:fixed; top:14px; left:14px; z-index:60;
+  display:block; width:34px; height:34px; padding:0;
+  background:rgba(19,12,30,0.42); border:0; color:rgba(251,228,216,0.58);
+  font-family:var(--sans); font-size:0; cursor:pointer;
+}
+.nav-toggle::before{
+  content:'☰'; font-size:18px; line-height:1;
+}
+.nav-toggle[aria-expanded="true"]::before{ content:'×'; font-size:25px; font-weight:300; }
+@media (max-width:820px){
+  .site-nav{
+    width:min(82vw,300px);
+    padding:58px 24px 24px;
+    background:rgba(19,12,30,0.985);
+  }
+}
+
+section{ position:relative; padding:96px var(--pad) 40px; }
+section:first-of-type{ padding-top:120px; }
+
+section.hero:first-of-type{ padding-top:0 !important; margin-top:0 !important; }
+.wrap{ max-width:var(--maxw); margin:0 auto; }
+.wrap-wide{ max-width:1080px; margin:0 auto; }
+
+.kicker{
+  font-family:var(--mono); font-size:0.72rem; text-transform:lowercase;
+  letter-spacing:0.03em; opacity:0.62; margin-bottom:10px;
+}
+h2.section-title{ font-size:clamp(1.7rem, 4vw, 2.5rem); margin-bottom:14px; }
+.section-intro{ font-size:1.06rem; max-width:58ch; opacity:0.92; }
+
+.card{
+  border-radius:14px; padding:clamp(20px,3vw,30px); margin:22px 0;
+  border:1px solid var(--card-border, rgba(0,0,0,0.08));
+  background:var(--card-bg, rgba(255,255,255,0.5));
+}
+.card h3{ font-size:1.18rem; margin-bottom:10px; }
+.card h4{ font-size:1rem; margin-bottom:6px; font-family:var(--sans); font-weight:600; }
+
+/* on-light color scheme (Overview, Artist Guide) */
+.on-light{ color:var(--ink); }
+.on-light .kicker{ color:var(--mauve); opacity:0.75; }
+.on-light .card{ --card-bg: rgba(255,250,247,0.55); --card-border: rgba(82,43,91,0.16); }
+.on-light .accent{ color:var(--dust); }
+.on-light a.inline-link{ color:var(--mauve); text-decoration-color:rgba(82,43,91,0.4); }
+.on-light .divider{ background:rgba(82,43,91,0.18); }
+
+/* on-mid (Architecture) */
+.on-mid{ color:var(--cream); }
+.on-mid .kicker{ color:var(--dust); opacity:0.95; }
+.on-mid .card{ --card-bg: rgba(43,18,76,0.42); --card-border: rgba(251,228,216,0.14); }
+.on-mid .accent{ color:var(--dust); }
+.on-mid a.inline-link{ color:var(--dust); }
+.on-mid .divider{ background:rgba(251,228,216,0.14); }
+
+/* on-dark (Overview, Artist Guide, Developer ref, Journey, Demo, Limitations) */
+.on-dark{ color:var(--cream); }
+.on-dark .kicker{ color:var(--dust); opacity:0.95; }
+.on-dark .card{ --card-bg: rgba(25,0,25,0.42); --card-border: rgba(251,228,216,0.13); }
+.on-dark .accent{ color:var(--dust); }
+.on-dark a.inline-link{ color:var(--dust); }
+.on-dark .divider{ background:rgba(251,228,216,0.13); }
+
+.divider{ height:1px; width:100%; margin:34px 0; border:none; }
+
+a.inline-link{ text-decoration:underline; text-underline-offset:3px; }
+
+.pill{
+  display:inline-flex; align-items:center; gap:6px;
+  font-family:var(--mono); font-size:0.74rem;
+  border:1px solid currentColor; border-radius:999px;
+  padding:4px 11px; opacity:0.85;
+}
+
+
+.hero{
+  padding:0 0 60px; position:relative; overflow:hidden; color:var(--cream);
+}
+
+/* -- overture: the fall, rendered before any prose -- */
+.rabbit-scene{
+  position:relative; min-height:760px; display:flex; flex-direction:column;
+  align-items:center; justify-content:flex-start; overflow:hidden;
+  padding:52px var(--pad) 36px;
+}
+.light-beam{
+  position:absolute; top:0; left:50%; width:72%; height:100%;
+  transform:translateX(-50%);
+  background:linear-gradient(to bottom,
+    rgba(223,92,145,0.50) 0%,
+    rgba(239,123,166,0.34) 18%,
+    rgba(133,79,108,0.22) 48%,
+    rgba(82,43,91,0.12) 74%,
+    rgba(43,18,76,0) 100%);
+  clip-path:polygon(47.7% 0%, 52.3% 0%, 100% 100%, 0% 100%);
+  pointer-events:none;
+}
+.light-hole{
+  position:absolute; top:-12px; left:50%; width:58px; height:58px;
+  transform:translateX(-50%);
+  border-radius:50%;
+  background:radial-gradient(circle,
+    rgba(255,184,210,0.98) 0%,
+    rgba(239,123,166,0.72) 22%,
+    rgba(223,92,145,0.34) 48%,
+    rgba(223,92,145,0) 74%);
+  filter:blur(1.5px);
+  box-shadow:0 8px 30px 10px rgba(223,92,145,0.24),
+             0 0 68px 20px rgba(133,79,108,0.24);
+  pointer-events:none;
+}
+.light-glow{
+  position:absolute; top:-20px; left:50%; width:min(58vw,520px); height:min(58vw,520px);
+  transform:translate(-50%,-50%);
+  border-radius:50%;
+  background:radial-gradient(circle, rgba(223,92,145,0.32) 0%, rgba(239,123,166,0.24) 30%, rgba(133,79,108,0.14) 55%, rgba(43,18,76,0) 74%);
+  pointer-events:none; filter:blur(8px);
+}
+.spiral-wrap{ position:relative; width:min(40vw, 220px); margin:26px 0 30px; filter:drop-shadow(0 0 14px rgba(82,43,91,0.55)); }
+.spiral-wrap svg{ width:100%; height:auto; }
+.spiral-wrap path{ animation:spin 100s linear infinite; transform-origin:center; }
+@keyframes spin{ to{ transform:rotate(360deg); } }
+
+.scatter-letter{
+  position:absolute; font-family:var(--serif); font-weight:600;
+  color:rgba(251,228,216,0.28); user-select:none; pointer-events:none;
+  font-size:clamp(2.2rem, 6vw, 3.4rem);
+}
+.scatter-icon{ position:absolute; color:rgba(251,228,216,0.3); pointer-events:none; }
+.scatter-icon svg{ width:22px; height:22px; }
+
+.scroll-chevron{
+  position:absolute; top:26px; right:clamp(18px,4vw,40px); color:rgba(251,228,216,0.55);
+  animation:chevron-bounce 2.6s ease-in-out infinite;
+}
+@keyframes chevron-bounce{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(6px); } }
+
+.scene-heading{
+  margin-top:42px; text-align:center; text-transform:uppercase;
+  font-family:var(--serif); font-weight:560; color:var(--cream);
+  font-size:clamp(1.7rem, 4.2vw, 3rem); line-height:1.12;
+  letter-spacing:0.02em; max-width:none; white-space:nowrap;
+}
+.pchar{ display:inline-block; }
+@keyframes pchar-bob{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-5px); } }
+
+.scene-caption{
+  font-family:var(--mono); font-size:0.86rem; color:rgba(251,228,216,0.62);
+  text-align:center; max-width:46ch; margin-top:10px; letter-spacing:0.01em;
+}
+
+@media (max-width:720px){
+  .rabbit-scene{ min-height:680px; padding-top:40px; }
+  .scene-heading{ white-space:normal; max-width:20ch; }
+  .scatter-letter{ font-size:clamp(1.6rem, 8vw, 2.2rem); opacity:0.6; }
+  .spiral-wrap{ width:48vw; }
+  .scroll-chevron{ display:none; }
+}
+
+.hero-body{ padding:0 var(--pad) 0; position:relative; max-width:1200px; margin:0 auto; text-align:center; }
+.hero-sub{
+  max-width:70ch; font-size:1.18rem; color:var(--cream);
+  opacity:0.78; margin:6px auto 0; text-align:center;
+}
+.hero-links{ margin-top:26px; display:flex; gap:14px; flex-wrap:wrap; justify-content:center; }
+.btn{
+  font-family:var(--sans); font-weight:600; font-size:0.92rem;
+  padding:11px 20px; border-radius:8px; text-decoration:none;
+  display:inline-flex; align-items:center; gap:8px; transition:transform 150ms ease, box-shadow 150ms ease;
+}
+.btn-primary{ background:var(--cream); color:var(--ink); }
+.btn-primary:hover{ transform:translateY(-1px); box-shadow:0 8px 22px rgba(0,0,0,0.35); }
+.btn-ghost{ border:1px solid rgba(251,228,216,0.4); color:var(--cream); }
+.btn-ghost:hover{ background:rgba(251,228,216,0.08); }
+
+.cap-grid{
+  margin-top:40px; max-width:980px; margin-left:auto; margin-right:auto;
+  display:grid; grid-template-columns:repeat(2, minmax(0,1fr));
+  column-gap:54px; row-gap:0; text-align:left;
+}
+.cap-card{
+  padding:15px 0 16px; border-top:1px solid rgba(251,228,216,0.16);
+}
+.cap-card h4{ font-size:0.95rem; margin-bottom:3px; color:var(--dust); font-weight:700; }
+.cap-card p{ font-size:0.94rem; opacity:0.78; margin:0; color:var(--cream); }
+@media (max-width:720px){
+  .cap-grid{ grid-template-columns:1fr; column-gap:0; }
+}
+
+.smile-divider{ width:100%; max-width:520px; margin:56px auto 10px; opacity:0.9; }
+.smile-divider svg{ width:100%; height:auto; }
+
+.step-list{ counter-reset:step; list-style:none; margin:26px 0; padding:0; }
+.step-list li{
+  counter-increment:step; position:relative; padding:2px 0 22px 42px;
+  font-size:0.98rem;
+}
+.step-list li::before{
+  content:counter(step); position:absolute; left:0; top:0;
+  width:26px; height:26px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-family:var(--mono); font-size:0.78rem;
+  background:var(--dust); color:var(--cream);
+}
+.step-list li::after{
+  content:""; position:absolute; left:13px; top:28px; bottom:0; width:1px;
+  background:rgba(82,43,91,0.25);
+}
+.step-list li:last-child::after{ display:none; }
+.step-list strong{ display:block; margin-bottom:2px; }
+
+.stagger-viz{
+  display:flex; gap:10px; align-items:flex-end; margin:22px 0 8px;
+  padding:22px 26px; border-radius:12px; background:rgba(255,250,247,0.96);
+  border:1px solid rgba(82,43,91,0.18); overflow-x:auto;
+}
+.stagger-letter{
+  font-family:var(--serif); font-weight:680; font-size:1.9rem; color:var(--ink);
+  animation:bob 2.4s ease-in-out infinite;
+}
+.stagger-letter:nth-child(1){ animation-delay:0s; }
+.stagger-letter:nth-child(2){ animation-delay:0.15s; }
+.stagger-letter:nth-child(3){ animation-delay:0.3s; }
+.stagger-letter:nth-child(4){ animation-delay:0.45s; }
+.stagger-letter:nth-child(5){ animation-delay:0.6s; }
+@keyframes bob{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-10px); } }
+.stagger-caption{ font-family:var(--mono); font-size:0.74rem; opacity:0.6; }
+
+/* recipe cards */
+.recipe-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin-top:20px; }
+.recipe-card{
+  border-radius:14px; padding:20px; background:rgba(255,250,247,0.9);
+  border:1px solid rgba(82,43,91,0.15); color:var(--ink);
+}
+.recipe-card .cup{ width:30px; height:30px; margin-bottom:10px; color:var(--dust); }
+.recipe-card h4{ margin-bottom:8px; }
+.recipe-meta{ font-family:var(--mono); font-size:0.76rem; opacity:0.7; line-height:1.9; }
+.recipe-meta b{ color:var(--mauve); font-weight:600; }
+
+/* order icons row */
+.order-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin:22px 0; }
+.order-card{
+  border-radius:12px; padding:16px; text-align:left; color:var(--ink);
+  background:rgba(255,250,247,0.9); border:1px solid rgba(82,43,91,0.15);
+}
+.order-card svg{ width:42px; height:28px; margin-bottom:10px; color:var(--dust); }
+.order-card h4{ font-size:0.9rem; margin-bottom:4px; }
+.order-card p{ font-size:0.82rem; opacity:0.8; margin:0; }
+
+
+.diagram{
+  padding:30px 0 34px; margin:0;
+  background:transparent; border:0; border-top:1px solid rgba(251,228,216,0.15);
+}
+.diagram h3{ font-size:1.05rem; margin-bottom:4px; color:var(--cream); }
+.diagram .diag-sub{ font-size:0.85rem; opacity:0.65; margin-bottom:18px; }
+.flow{
+  display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:20px 0 18px;
+}
+.flow-node{
+  font-family:var(--mono); font-size:0.8rem; padding:2px 0;
+  background:transparent; border:0; color:var(--cream); white-space:nowrap;
+}
+.flow-arrow{ color:var(--dust); font-size:1rem; opacity:0.9; }
+.diag-meta{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:14px; margin-top:16px; font-size:0.86rem;
+}
+.diag-meta div{ }
+.diag-meta b{ display:block; font-family:var(--mono); font-size:0.7rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--dust); margin-bottom:5px; opacity:0.95; }
+
+
+.media-slot{
+  margin:30px 0; padding:26px 0; min-height:0;
+  border-top:1px solid rgba(251,228,216,0.13);
+  border-bottom:1px solid rgba(251,228,216,0.13);
+  background:transparent; color:var(--cream);
+}
+.media-slot.compact,.media-slot.tall{ min-height:0; }
+.media-slot .media-inner{ max-width:60ch; margin:0 auto; text-align:center; }
+.media-slot .media-label{
+  display:block; font-family:var(--mono); font-size:0.68rem;
+  text-transform:uppercase; letter-spacing:0.08em; color:var(--dust); margin-bottom:7px;
+}
+.media-slot strong{ display:block; font-family:var(--serif); font-size:1.05rem; margin-bottom:5px; }
+.media-slot p{ margin:0; font-size:0.84rem; opacity:0.62; }
+.media-slot code{ font-size:0.76rem; }
+.media-slot.video-slot{ aspect-ratio:auto; min-height:0; }
+
+.media-carousel{
+  margin:30px 0; border-top:1px solid rgba(251,228,216,0.13);
+  border-bottom:1px solid rgba(251,228,216,0.13); padding:24px 0 20px;
+}
+.media-carousel-viewport{ position:relative; overflow:hidden; }
+.media-slide{ display:none; text-align:center; }
+.media-slide.active{ display:block; }
+.media-slide img{
+  display:block; width:min(100%,900px); max-height:560px; object-fit:contain;
+  margin:0 auto; border-radius:2px;
+}
+.media-slide .slide-placeholder{
+  min-height:300px; display:flex; align-items:center; justify-content:center;
+  padding:28px; border:1px dashed rgba(251,228,216,0.18);
+  color:var(--cream); opacity:0.72;
+}
+.media-slide-caption{ margin-top:12px; font-size:0.82rem; opacity:0.62; }
+.media-carousel-controls{
+  display:flex; justify-content:center; align-items:center; gap:16px; margin-top:14px;
+}
+.media-carousel-controls button{
+  border:0; background:transparent; color:var(--cream); cursor:pointer;
+  font-family:var(--mono); font-size:0.78rem; padding:3px 4px; opacity:0.72;
+}
+.media-carousel-controls button:hover{ opacity:1; }
+.media-dots{ display:flex; gap:6px; align-items:center; }
+.media-dot{
+  width:5px; height:5px; border-radius:50%; border:0; padding:0;
+  background:rgba(251,228,216,0.28); cursor:pointer;
+}
+.media-dot.active{ background:var(--dust); }
+@media (max-width:720px){
+  .media-slide .slide-placeholder{ min-height:210px; }
+}
+
+.file-list{ margin:20px 0; border-radius:12px; overflow:hidden; border:1px solid rgba(251,228,216,0.14); color:var(--cream); }
+.file-row{
+  display:flex; gap:18px; padding:13px 18px; font-size:0.86rem;
+  border-bottom:1px solid rgba(251,228,216,0.08);
+  background:rgba(25,0,25,0.78);
+}
+.file-row:last-child{ border-bottom:none; }
+.file-row .path{ font-family:var(--mono); color:var(--dust); white-space:nowrap; flex-shrink:0; min-width:230px; }
+.file-row .desc{ opacity:0.82; }
+@media (max-width:640px){ .file-row{ flex-direction:column; gap:4px; } .file-row .path{ min-width:0; } }
+
+.method-grid{ display:grid; gap:12px; margin:20px 0; }
+.method{
+  padding:14px 18px; border-radius:10px; background:rgba(25,0,25,0.82);
+  border:1px solid rgba(251,228,216,0.1); color:var(--cream);
+}
+.method code{ color:var(--dust); font-size:0.86rem; }
+.method p{ font-size:0.87rem; opacity:0.85; margin-top:6px; }
+
+.bug-card{
+  border-radius:14px; padding:22px; margin:22px 0; color:var(--cream);
+  background:rgba(25,0,25,0.85); border:1px solid rgba(251,228,216,0.14);
+  border-left:3px solid var(--dust);
+}
+.bug-card h4{ font-family:var(--mono); font-size:0.9rem; color:var(--dust); margin-bottom:12px; text-transform:none; }
+.bug-card .label{ font-family:var(--mono); font-size:0.7rem; text-transform:uppercase; letter-spacing:0.05em; opacity:0.65; display:block; margin-bottom:4px;}
+.bug-card p{ font-size:0.9rem; opacity:0.9; }
+
+.check-table{ width:100%; border-collapse:collapse; margin:20px 0; font-size:0.86rem; }
+.check-table th{ text-align:left; font-family:var(--mono); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--cream); opacity:0.96; padding:8px 12px; border-bottom:1px solid rgba(251,228,216,0.22); }
+.check-table td{ padding:10px 12px; border-bottom:1px solid rgba(251,228,216,0.08); vertical-align:top; opacity:0.9; }
+.check-table td:first-child{ font-weight:600; white-space:nowrap; color:var(--blush); }
+
+.fail-list{ margin:16px 0; padding-left:0; list-style:none; }
+.fail-list li{ padding:9px 0 9px 22px; position:relative; font-size:0.9rem; border-bottom:1px solid rgba(251,228,216,0.08); opacity:0.9; }
+.fail-list li::before{ content:"⚠"; position:absolute; left:0; top:9px; color:var(--dust); font-size:0.8rem; }
+
+.journey{ position:relative; margin:30px 0 0; padding-left:24px; border-left:1px solid rgba(251,228,216,0.2); }
+.journey-item{ position:relative; padding-bottom:34px; }
+.journey-item:last-child{ padding-bottom:0; }
+.journey-item::before{
+  content:""; position:absolute; left:-29px; top:4px; width:10px; height:10px;
+  border-radius:50%; background:var(--dust); box-shadow:0 0 0 4px rgba(25,0,25,0.9);
+}
+.journey-date{ font-family:var(--mono); font-size:0.78rem; color:var(--dust); margin-bottom:6px; }
+.journey-item h4{ font-size:1.02rem; margin-bottom:6px; color:var(--cream); }
+.journey-item p{ font-size:0.9rem; opacity:0.85; }
+
+.storyboard{ display:grid; gap:14px; margin-top:24px; }
+.scene{
+  display:grid; grid-template-columns:70px 1fr; gap:18px; align-items:start;
+  padding:18px 20px; border-radius:12px; background:rgba(25,0,25,0.85);
+  border:1px solid rgba(251,228,216,0.12); color:var(--cream);
+}
+.scene .num{ font-family:var(--serif); font-style:italic; font-size:1.7rem; color:var(--dust); opacity:0.85; }
+.scene h4{ font-size:1rem; color:var(--cream); margin-bottom:6px; }
+.scene p{ font-size:0.88rem; opacity:0.82; margin-bottom:8px; }
+.scene .tag{
+  display:inline-block; font-family:var(--mono); font-size:0.7rem;
+  padding:3px 9px; border-radius:999px; border:1px solid rgba(251,228,216,0.25); color:var(--dust);
+}
+.end-card{
+  margin-top:6px; text-align:center; padding:38px 20px; border-radius:16px; color:var(--cream);
+  background:radial-gradient(circle at 50% 30%, rgba(82,43,91,0.28), transparent 70%), rgba(25,0,25,0.85);
+  border:1px solid rgba(251,228,216,0.18);
+}
+.end-card h3{ font-family:var(--serif); font-style:italic; font-size:1.5rem; color:var(--cream); margin-bottom:10px; }
+.end-card p{ font-family:var(--mono); font-size:0.8rem; opacity:0.7; }
+.limit-list{ list-style:none; padding:0; margin:22px 0; }
+.limit-list li{
+  padding:16px 20px; margin-bottom:10px; border-radius:10px; color:var(--cream);
+  background:rgba(25,0,25,0.85); border:1px solid rgba(251,228,216,0.12);
+  font-size:0.9rem; opacity:0.92;
+}
+.limit-list b{ color:var(--dust); font-weight:600; }
+
+
+.link-grid{ display:grid; gap:12px; margin-top:22px; }
+.link-row{
+  display:flex; justify-content:space-between; align-items:center; gap:16px; color:var(--cream);
+  padding:15px 20px; border-radius:10px; background:rgba(0,0,0,0.82);
+  border:1px solid rgba(251,228,216,0.14); flex-wrap:wrap;
+}
+.link-row .label{ font-size:0.88rem; opacity:0.85; }
+.link-row a{ font-family:var(--mono); font-size:0.82rem; color:var(--dust); text-decoration:underline; text-underline-offset:3px; word-break:break-all; }
+
+footer{
+  padding:50px var(--pad) 60px; text-align:center; color:var(--ink);
+}
+footer .fmark{ opacity:0.9; margin-bottom:10px; }
+footer .fnote{ font-family:var(--mono); font-size:0.76rem; opacity:0.5; }
+
+/* teeny icon reset */
+.icon{ width:20px; height:20px; }
+</style>
+</head>
+<body>
+
+<div class="thread" id="thread"></div>
+
+<button class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="navLinks" aria-label="Open navigation">Menu</button>
+<nav class="site-nav" id="siteNav">
+  <ul class="nav-links" id="navLinks">
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#user-guide">Artist Guide</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#developer-reference">Developer Reference</a></li>
+    <li><a href="#journey">Journey</a></li>
+    <li><a href="#demo">Demo</a></li>
+    <li><a href="#links">Links</a></li>
+  </ul>
+</nav>
+
+
+<section id="top" class="hero">
+
+  <div class="rabbit-scene">
+    <div class="light-beam" aria-hidden="true"></div>
+    <div class="light-hole" aria-hidden="true"></div>
+    <div class="light-glow" aria-hidden="true"></div>
+
+    <svg class="scroll-chevron" width="20" height="12" viewBox="0 0 20 12" fill="none" aria-hidden="true">
+      <path d="M1 1l9 9 9-9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+
+    <div aria-hidden="true">
+      <span class="scatter-letter" style="top:6%; left:12%; transform:rotate(-14deg);">S</span>
+      <span class="scatter-letter" style="top:2%; left:34%; transform:rotate(8deg);">Y</span>
+      <span class="scatter-letter" style="top:8%; left:58%; transform:rotate(-6deg);">N</span>
+      <span class="scatter-letter" style="top:0%; left:78%; transform:rotate(15deg);">F</span>
+      <span class="scatter-letter" style="top:14%; left:88%; transform:rotate(-10deg);">I</span>
+      <span class="scatter-letter" style="top:30%; left:92%; transform:rotate(10deg);">G</span>
+
+      <span class="scatter-icon" style="top:4%; left:6%;">
+        <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.4"/><path d="M12 8v4l3 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      </span>
+      <span class="scatter-icon" style="top:22%; left:16%;" title="the White Rabbit">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M9 9c-1-2.4-.4-5 1-5s1.6 2.6.9 5M14 9c1-2.4.4-5-1-5s-1.6 2.6-.9 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><ellipse cx="11.7" cy="13" rx="4.6" ry="4" stroke="currentColor" stroke-width="1.3"/><circle cx="10.1" cy="12.2" r="0.7" fill="currentColor"/><path d="M15.6 15.5c1.6.3 3 1.4 3 2.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </span>
+      <span class="scatter-icon" style="top:18%; right:12%;">
+        <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M4 10h16" stroke="currentColor" stroke-width="1.4"/></svg>
+      </span>
+      <span class="scatter-icon" style="top:34%; right:5%;" title="the Cheshire Cat">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M6 9 3 6M18 9l3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M6 12a6 6 0 1112 0c0 3.6-2.7 6-6 6s-6-2.4-6-6z" stroke="currentColor" stroke-width="1.3"/><circle cx="9.4" cy="11.4" r="0.7" fill="currentColor"/><circle cx="14.6" cy="11.4" r="0.7" fill="currentColor"/><path d="M8.6 14.8c1 .9 5.8.9 6.8 0" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </span>
+      <span class="scatter-icon" style="bottom:8%; left:8%;">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v6M12 3l4 4M12 3L8 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><rect x="5" y="13" width="14" height="7" rx="1.5" stroke="currentColor" stroke-width="1.4"/></svg>
+      </span>
+      <span class="scatter-icon" style="bottom:6%; right:10%;">
+        <svg viewBox="0 0 24 24" fill="none"><circle cx="7" cy="8" r="1.6" fill="currentColor"/><circle cx="17" cy="16" r="1.6" fill="currentColor"/><circle cx="17" cy="8" r="1.6" fill="currentColor"/><circle cx="7" cy="16" r="1.6" fill="currentColor"/></svg>
+      </span>
+    </div>
+
+    <div class="spiral-wrap">
+      <svg viewBox="0 0 400 400" fill="none" aria-hidden="true">
+        <path d="M200 200 C200 150 240 130 270 150 C310 175 300 230 260 250 C210 275 155 250 140 200 C120 140 165 80 230 80 C310 80 360 145 350 220 C338 305 255 355 175 335"
+          stroke="#854F6C" stroke-width="1.6" stroke-linecap="round" opacity="0.8"/>
+      </svg>
+    </div>
+
+    <h1 class="scene-heading letterize">Per‑Character Text Animation</h1>
+    <p class="scene-caption">Google Summer of Code 2026 · Synfig Studio</p>
+    <p class="hero-sub">A Text Group previously moved as one rigid block. This project gives every glyph inside it independent rotation, scale, and timing — and a mechanism for one glyph's animation to be shared with the rest, delayed, reordered, or reshuffled by a repeatable seed.</p>
+  </div>
+
+  <div class="hero-body">
+    <div class="hero-links">
+      <a class="btn btn-primary" href="https://github.com/synfig/synfig/pull/3742" target="_blank" rel="noopener">View Pull Request #3742</a>
+      <a class="btn btn-ghost" href="#demo">Jump to the demo storyboard</a>
+    </div>
+
+    <div class="cap-grid">
+      <div class="cap-card"><h4>Independent glyphs</h4><p>Each letter is its own layer with rotation, scale, and animation offset.</p></div>
+      <div class="cap-card"><h4>Shared animation</h4><p>One glyph's animation can be reused across the whole word.</p></div>
+      <div class="cap-card"><h4>Delay &amp; order</h4><p>Choreograph forward, reverse, or random sequencing.</p></div>
+      <div class="cap-card"><h4>Random stagger</h4><p>A repeatable seed reshuffles the sequence without touching the animation.</p></div>
+      <div class="cap-card"><h4>Studio integration</h4><p>A dedicated parameter selector for choosing what to share.</p></div>
+      <div class="cap-card"><h4>Save &amp; reload</h4><p>Sharing configuration is part of the document, not a session setting.</p></div>
+      <div class="cap-card"><h4>Undo &amp; redo</h4><p>Sharing and unsharing route through Synfig's action system.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="overview" class="on-dark">
+  <div class="wrap">
+    <p class="kicker">status — reviewed 2 September 2026</p>
+    <h2 class="section-title">Where the project actually stands</h2>
+    <p class="section-intro">The reviewed codebase is no longer accurately described as an initial prototype. It now spans core text processing, glyph layers, value‑node types, temporal wrappers, serialization, Studio widgets and tree handling, and action integration. What's left is concentrated on static‑analysis cleanup, runtime verification, and final mentor review — not broad architectural change.</p>
+
+    <div class="card">
+      <h3>Repository &amp; review state</h3>
+      <p><span class="accent">Primary repository</span> — <code>XYuktaaa/synfig</code>, branch <code>GSoC26-text-animation</code>, pull request <a class="inline-link" href="https://github.com/synfig/synfig/pull/3742" target="_blank" rel="noopener">#3742</a>.</p>
+      <p><span class="accent">Compare against base</span> — 80 commits ahead, 9 behind. Changes span both <code>synfig-core</code> and <code>synfig-studio</code>.</p>
+    </div>
+
+    <p style="margin-top:28px; font-size:0.95rem; opacity:0.85;">Types introduced or modified: <code class="mono">Layer_TextGroup</code>, <code class="mono">Layer_GlyphShape</code>, <code class="mono">AnimShare</code>, <code class="mono">ValueNode_AnimShareList</code>, and <code class="mono">ValueNode_TimeOffset</code>.</p>
+  </div>
+</section>
+
+<div class="smile-divider on-dark" aria-hidden="true">
+  <svg viewBox="0 0 500 140" fill="none">
+    <path d="M20 20 C120 130 380 130 480 20" stroke="#854F6C" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+    <g fill="#854F6C" opacity="0.45">
+      <g transform="translate(74.7,62.1) rotate(29)"><path d="M-14,0 L14,0 L0,22 Z"/></g>
+      <g transform="translate(139.6,87.9) rotate(16)"><path d="M-14,0 L14,0 L0,22 Z"/></g>
+      <g transform="translate(212.3,100.9) rotate(5)"><path d="M-14,0 L14,0 L0,22 Z"/></g>
+      <g transform="translate(287.7,100.9) rotate(-5)"><path d="M-14,0 L14,0 L0,22 Z"/></g>
+      <g transform="translate(360.4,87.9) rotate(-16)"><path d="M-14,0 L14,0 L0,22 Z"/></g>
+      <g transform="translate(425.3,62.1) rotate(-29)"><path d="M-14,0 L14,0 L0,22 Z"/></g>
+    </g>
+  </svg>
+</div>
+
+
+<section id="user-guide" class="on-dark">
+  <div class="wrap">
+    <p class="kicker">for users</p>
+    <h2 class="section-title">Users Guide</h2>
+    <p class="section-intro">A Text Group turns typed text into a small company of glyph layers, each one still under the Text Group's direction. What follows is how to give those glyphs their own motion, and how to hand that motion to one another.</p>
+
+    <h3 style="margin-top:40px; font-size:1.2rem;">What is a Text Group?</h3>
+    <p>One text object becomes a managed collection of glyph layers, while a single Text Group parent still controls layout, font, and color. The glyphs live inside its subcanvas as implementation children — you don't create them directly, and they aren't meant to be treated as ordinary top‑level layers.</p>
+
+    <h3 style="margin-top:34px; font-size:1.2rem;">Making your first per‑character animation</h3>
+    <ol class="step-list">
+      <li><strong>Create the text.</strong> Add a Text Group, type <em>HELLO</em>, and set its font, weight, size, and layout as usual. The Text Group shapes the text and builds glyph layers in its internal subcanvas.</li>
+      <li><strong>Select a glyph.</strong> Pick one letter — say, the H — and animate its Scale from 1.0 up to 1.3 and back. Rotation, Scale, and Animation Offset are all exposed as glyph‑level parameters. The Text Group's own origin stays separate and shouldn't be treated as a shared parameter.</li>
+      <li><strong>Open Share Animation.</strong> In the Text Group's Share Animation list, add an entry and choose Scale from the parameter selector — the custom picker built for this purpose, so you're choosing a glyph parameter rather than hunting through value‑node internals.</li>
+      <li><strong>Set delay and order.</strong> Delay controls how far each glyph is shifted in time from the source animation; order decides which glyph gets the earliest part of it. Forward order moves E‑L‑L‑O in sequence after H.</li>
+      <li><strong>Preview, then save and reopen.</strong> Confirm the same list, delay, order, and resulting animation come back exactly as you left them.</li>
+    </ol>
+
+    <div class="stagger-viz" aria-hidden="true">
+      <span class="stagger-letter">H</span><span class="stagger-letter">E</span><span class="stagger-letter">L</span><span class="stagger-letter">L</span><span class="stagger-letter">O</span>
+    </div>
+    <p class="stagger-caption">one shared animation, five glyphs, each sampling it a little later than the last</p>
+
+    <div class="media-carousel" aria-label="Synfig screenshots">
+      <div class="media-carousel-viewport">
+        <div class="media-slide active">
+          <div class="slide-placeholder">Screenshot 1 — Text Group / Share Animation panel</div>
+          <p class="media-slide-caption">UI view: Text Group parameters and sharing controls.</p>
+        </div>
+        <div class="media-slide">
+          <div class="slide-placeholder">Screenshot 2 — individual glyph editing</div>
+          <p class="media-slide-caption">Canvas or parameter view showing one glyph being animated independently.</p>
+        </div>
+        <div class="media-slide">
+          <div class="slide-placeholder">GIF / video frame — staggered result</div>
+          <p class="media-slide-caption">A short animation showing the shared motion travelling through the glyphs.</p>
+        </div>
+      </div>
+      <div class="media-carousel-controls">
+        <button type="button" class="media-prev" aria-label="Previous image">←</button>
+        <div class="media-dots" aria-label="Choose screenshot">
+          <button type="button" class="media-dot active" aria-label="Show image 1"></button>
+          <button type="button" class="media-dot" aria-label="Show image 2"></button>
+          <button type="button" class="media-dot" aria-label="Show image 3"></button>
+        </div>
+        <button type="button" class="media-next" aria-label="Next image">→</button>
+      </div>
+    </div>
+
+    <h3 style="margin-top:44px; font-size:1.2rem;">Sharing an animation, in plain terms</h3>
+    <p>A <span class="accent">source animation</span> lives on one glyph's parameter. When you share it, the Text Group resolves that animated value node and connects it — through a per‑glyph time wrapper — to the same parameter on other glyphs. <span class="accent">Delay</span> is how far apart each glyph samples it; <span class="accent">order</span> is who goes first. A positive delay should always mean a later glyph starts later, not earlier — a wave forming rather than every glyph twitching at once.</p>
+
+    <h3 style="margin-top:34px; font-size:1.2rem;">Order</h3>
+    <div class="order-grid">
+      <div class="order-card">
+        <svg viewBox="0 0 40 24"><line x1="2" y1="12" x2="34" y2="12" stroke="currentColor" stroke-width="2"/><path d="M26 5 L34 12 L26 19" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        <h4>Forward</h4><p>Proceeds through the glyph sequence, first to last.</p>
+      </div>
+      <div class="order-card">
+        <svg viewBox="0 0 40 24"><line x1="6" y1="12" x2="38" y2="12" stroke="currentColor" stroke-width="2"/><path d="M14 5 L6 12 L14 19" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        <h4>Reverse</h4><p>Starts from the last glyph and moves backward.</p>
+      </div>
+      <div class="order-card">
+        <svg viewBox="0 0 40 24"><path d="M4 6 C14 6 26 18 36 18 M4 18 C14 18 26 6 36 6" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        <h4>Random</h4><p>Uses the Text Group's stagger seed for a repeatable shuffle.</p>
+      </div>
+    </div>
+    <p style="font-size:0.92rem; opacity:0.8;">The <span class="accent">seed</span> changes the random ordering without touching the animation itself — a way to try several controlled variations of the same effect. Change the seed, and the order reshuffles; keep everything else the same.</p>
+
+    <h3 style="margin-top:40px; font-size:1.2rem;">Choosing a parameter</h3>
+    <p>Rotation, Scale, and Animation Offset are the glyph properties intended to be shared. Editing a shared parameter moves every glyph that participates in that sharing relationship — that's the point of sharing, not a side effect. Anything that needs to stay independently positioned shouldn't be shared.</p>
+
+    <h3 style="margin-top:40px; font-size:1.2rem; display:flex; align-items:center; gap:10px;">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" style="color:var(--dust)"><circle cx="10" cy="12" r="7" stroke="currentColor" stroke-width="1.6"/><path d="M10 8v4l3 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M8 3h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      Stagger recipes
+    </h3>
+    <p>Three starting points, served the way the Hatter would insist on serving them — with a cup for each mood.</p>
+    <div class="recipe-grid">
+      <div class="recipe-card">
+        <svg class="cup" viewBox="0 0 24 24" fill="none"><path d="M4 8h13a3 3 0 010 6h-1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M4 8v6a4 4 0 004 4h4a4 4 0 004-4V8" stroke="currentColor" stroke-width="1.6"/><path d="M6 4c0 1 1 1 1 2s-1 1-1 2M10 4c0 1 1 1 1 2s-1 1-1 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        <h4>Typing / Reveal</h4>
+        <p class="recipe-meta"><b>Source</b> fade or scale‑in on the first glyph<br><b>Delay</b> small, steady step<br><b>Order</b> forward</p>
+        <p style="font-size:0.85rem; margin-top:10px; opacity:0.85;">Letters appear left to right, like a typewriter finding its rhythm.</p>
+      </div>
+      <div class="recipe-card">
+        <svg class="cup" viewBox="0 0 24 24" fill="none"><path d="M4 8h13a3 3 0 010 6h-1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M4 8v6a4 4 0 004 4h4a4 4 0 004-4V8" stroke="currentColor" stroke-width="1.6"/><path d="M6 4c0 1 1 1 1 2s-1 1-1 2M10 4c0 1 1 1 1 2s-1 1-1 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        <h4>Pulse / Wave</h4>
+        <p class="recipe-meta"><b>Source</b> scale up and down, looping<br><b>Delay</b> moderate<br><b>Order</b> forward</p>
+        <p style="font-size:0.85rem; margin-top:10px; opacity:0.85;">A ripple moves through the word, rather than a single beat.</p>
+      </div>
+      <div class="recipe-card">
+        <svg class="cup" viewBox="0 0 24 24" fill="none"><path d="M4 8h13a3 3 0 010 6h-1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M4 8v6a4 4 0 004 4h4a4 4 0 004-4V8" stroke="currentColor" stroke-width="1.6"/><path d="M6 4c0 1 1 1 1 2s-1 1-1 2M10 4c0 1 1 1 1 2s-1 1-1 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        <h4>Random Chaos</h4>
+        <p class="recipe-meta"><b>Source</b> rotation or scale<br><b>Delay</b> your choice<br><b>Order</b> random, with a seed</p>
+        <p style="font-size:0.85rem; margin-top:10px; opacity:0.85;">Unpredictable, but repeatable — change the seed to reshuffle it entirely.</p>
+      </div>
+    </div>
+
+    <h3 style="margin-top:44px; font-size:1.2rem;">Editing and undo</h3>
+    <p>Removing a sharing entry restores the glyph's original, independent node rather than leaving a dangling connection. Add, edit, or remove entries and Synfig's action system carries the undo/redo — including the first entry you ever add, which is worth testing on its own.</p>
+
+    <h3 style="margin-top:34px; font-size:1.2rem;">Timeline advice</h3>
+    <p>Stagger adds time to the sequence. If the source animation lasts <em>T</em> and there are <em>N</em> glyphs with a per‑step delay of <em>d</em>, the last glyph can need roughly <strong>T + (N−1)d</strong> to finish. Leave enough timeline after the source animation for the whole staggered sequence to land — the final letter is often still moving after the first one has stopped.</p>
+
+    <h3 style="margin-top:34px; font-size:1.2rem;">Saving</h3>
+    <p>Sharing is stored as part of the document through Synfig's value‑node and canvas machinery — not a temporary Studio‑only setting. Before you call a scene finished: create a share, save, close, reopen, and check that the list, delay, order, and animation are exactly as you left them.</p>
+  </div>
+</section>
+
+<!-- ============================================================
+     ARCHITECTURE
+     ============================================================ -->
+<section id="architecture" class="on-mid">
+  <div class="wrap-wide">
+    <p class="kicker">how it fits together</p>
+    <h2 class="section-title">Architecture</h2>
+    <p class="section-intro">Six views of the system, from a typed letter to runtime evaluation and a saved file. The first cards give the quick mental model; the implementation workflows below show the exact paths worth knowing.</p>
+
+    <div class="diagram">
+      <h3>1 · Authoring</h3>
+      <p class="diag-sub">How an User's action becomes a structural change.</p>
+      <div class="flow">
+        <span class="flow-node">Artist</span><span class="flow-arrow">→</span>
+        <span class="flow-node">Text Group</span><span class="flow-arrow">→</span>
+        <span class="flow-node">Share Animation list</span><span class="flow-arrow">→</span>
+        <span class="flow-node">Studio editor</span>
+      </div>
+      <div class="diag-meta">
+        <div><b>Why it exists</b>Gives users a guided path to choosing what's shared, instead of editing value nodes directly.</div>
+        <div><b>Owned by</b>Studio widgets &amp; Layer_TextGroup</div>
+        <div><b>Failure modes</b>Selector shows unrelated parameters if not filtered to shareable ones.</div>
+      </div>
+    </div>
+
+    <div class="diagram">
+      <h3>2 · Text conversion</h3>
+      <p class="diag-sub">Turning a string into shapes.</p>
+      <div class="flow">
+        <span class="flow-node">Text string</span><span class="flow-arrow">→</span>
+        <span class="flow-node">Shaping / layout</span><span class="flow-arrow">→</span>
+        <span class="flow-node">Glyph contour chunks</span><span class="flow-arrow">→</span>
+        <span class="flow-node">GlyphShape layers</span>
+      </div>
+      <div class="diag-meta">
+        <div><b>Why it exists</b>Separates text decomposition from layer synchronization, and from Layer_Freetype.</div>
+        <div><b>Owned by</b>text_processing.cpp/.h, using HarfBuzz/FreeType, UTF‑8 aware</div>
+        <div><b>Important files</b><code class="mono">lyr_textgroup.cpp</code>, <code class="mono">text_processing.cpp</code></div>
+        <div><b>Failure modes</b>Byte‑oriented iteration breaks multibyte scripts — flagged and fixed early; only claim script coverage that's actually been tested.</div>
+      </div>
+    </div>
+
+    <div class="diagram">
+      <h3>3 · Shared animation</h3>
+      <p class="diag-sub">One glyph's motion, sampled by many.</p>
+      <div class="flow">
+        <span class="flow-node">Source glyph parameter</span><span class="flow-arrow">→</span>
+        <span class="flow-node">Exported persistent node</span><span class="flow-arrow">→</span>
+        <span class="flow-node">TimeOffset wrapper (per glyph)</span><span class="flow-arrow">→</span>
+        <span class="flow-node">Glyph parameter</span>
+      </div>
+      <div class="diag-meta">
+        <div><b>Why it exists</b>Without a per‑glyph time shift, every glyph would sample the exact same instant — motion in unison, not in sequence.</div>
+        <div><b>Owned by</b>ValueNode_AnimShareList, ValueNode_TimeOffset</div>
+        <div><b>Failure modes</b>Wrapper cache reused when it shouldn't be if the underlying shared node changed; Vector/Composite inversion for Animation Offset needs focused verification.</div>
+      </div>
+    </div>
+
+    <div class="diagram">
+      <h3>4 · Update lifecycle</h3>
+      <p class="diag-sub">What runs when something changes.</p>
+      <div class="flow">
+        <span class="flow-node">Text/layout change</span><span class="flow-arrow">→</span>
+        <span class="flow-node">sync_glyphs</span>
+      </div>
+      <div class="flow">
+        <span class="flow-node">Share‑list change</span><span class="flow-arrow">→</span>
+        <span class="flow-node">rebuild_shared_entries</span><span class="flow-arrow">→</span>
+        <span class="flow-node">resolve nodes</span><span class="flow-arrow">→</span>
+        <span class="flow-node">attach wrappers</span>
+      </div>
+      <div class="flow">
+        <span class="flow-node">Unshare</span><span class="flow-arrow">→</span>
+        <span class="flow-node">remove entry</span><span class="flow-arrow">→</span>
+        <span class="flow-node">detach / restore original node</span>
+      </div>
+      <div class="diag-meta">
+        <div><b>Why it exists</b>Glyphs are reused where possible instead of destroyed and rebuilt — a full clear could erase hand‑made keyframes and connections.</div>
+        <div><b>Failure modes</b>An entry that disappears from the list but isn't explicitly detached leaves a glyph wired to a stale wrapper.</div>
+      </div>
+    </div>
+
+    <div class="diagram">
+      <h3>5 · Persistence</h3>
+      <p class="diag-sub">What survives a save and reload.</p>
+      <div class="flow">
+        <span class="flow-node">AnimShare list + exported nodes</span><span class="flow-arrow">→</span>
+        <span class="flow-node">SIF serialization</span><span class="flow-arrow">→</span>
+        <span class="flow-node">Load</span><span class="flow-arrow">→</span>
+        <span class="flow-node">Reconstruct from structural list</span>
+      </div>
+      <div class="diag-meta">
+        <div><b>Why it exists</b>Sharing must reconstruct identically regardless of which frame the document happened to be on when it was saved.</div>
+        <div><b>Failure modes</b>Reconstructing from a time‑evaluated list rather than the raw structural entries makes a share appear to vanish on some frames — a fixed bug, described below.</div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+    <p class="kicker">implementation workflows</p>
+    <h2 class="section-title" style="font-size:clamp(1.45rem,3vw,2rem);">What actually happens under the hood</h2>
+    <p class="section-intro">These are the four paths that matter most when reading or maintaining <code>Layer_TextGroup</code>. They complement the high-level cards above rather than replacing them.</p>
+
+    <div class="diagram">
+      <h3>Workflow A · Text → glyph layers (<code>sync_glyphs</code>)</h3>
+      <p class="diag-sub">Text edits rebuild only what has to change.</p>
+      <div class="flow">
+        <span class="flow-node">load_font_static</span><span class="flow-arrow">→</span>
+        <span class="flow-node">shape_text</span><span class="flow-arrow">→</span>
+        <span class="flow-node">glyph contours + layout</span><span class="flow-arrow">→</span>
+        <span class="flow-node">LCS match</span><span class="flow-arrow">→</span>
+        <span class="flow-node">reuse / create GlyphShape</span>
+      </div>
+      <p style="font-size:0.9rem; opacity:0.86;">When text or font parameters change, <code>sync_glyphs()</code> loads the font, shapes the text (using HarfBuzz when available), converts each outline to contours, and computes glyph placement. The important preservation step is an LCS diff between old and new glyph identities: matching <code>Layer_GlyphShape</code> children are reused, so attached animation is not discarded just because the text changed. Glyph descriptions carry an identity key of the form <code>cluster_&lt;c&gt;_glyph_&lt;g&gt;</code>, which can be parsed back during synchronization.</p>
+    </div>
+
+    <div class="media-slot tall">
+      <div class="media-inner">
+        <span class="media-label">Architecture image</span>
+        <strong>Text → glyph synchronization diagram</strong>
+        <p>Drop your vertical <code>sync_glyphs()</code> workflow image here. This is the best place for the diagram showing font load, contour conversion, LCS reuse, positioning, permutation rebuild and shared-entry attachment.</p>
+      </div>
+    </div>
+
+    <div class="diagram">
+      <h3>Workflow B · Sharing + staggering</h3>
+      <p class="diag-sub">One source animation becomes many time-shifted samples.</p>
+      <div class="flow">
+        <span class="flow-node">UI staging params</span><span class="flow-arrow">→</span>
+        <span class="flow-node">share_param</span><span class="flow-arrow">→</span>
+        <span class="flow-node">resolve + export node</span><span class="flow-arrow">→</span>
+        <span class="flow-node">SharedEntry</span><span class="flow-arrow">→</span>
+        <span class="flow-node">TimeOffset per glyph</span>
+      </div>
+      <p style="font-size:0.9rem; opacity:0.86;">The Add Shared Animation UI stages <code>param_stagger_delay</code> and <code>param_stagger_order</code>; committing through <code>param_share_target</code> calls <code>share_param()</code>. The source glyph's animated node is resolved and exported under a persistent unique ID, then every participating glyph receives its own <code>ValueNode_TimeOffset</code> wrapper around that shared node.</p>
+      <p style="font-size:0.9rem; opacity:0.86;">For RANDOM order, <code>rebuild_stagger_permutation()</code> ranks glyphs from a hash of <code>(cluster, glyph_index)</code> mixed with a per-layer salt. Sorting those ranks produces <code>stagger_perm_</code>, so the order looks random but remains reproducible for the document.</p>
+    </div>
+
+    <div class="media-slot">
+      <div class="media-inner">
+        <span class="media-label">Architecture image</span>
+        <strong>Text Group → shared entries → glyph wrappers</strong>
+        <p>Use your ownership/wiring diagram here: <code>Layer_TextGroup</code>, sub-canvas, <code>shared_entries_</code>, <code>stagger_perm_</code>, and the individual <code>Layer_GlyphShape</code> children.</p>
+      </div>
+    </div>
+
+    <div class="diagram">
+      <h3>Workflow C · Persistence and reconstruction</h3>
+      <p class="diag-sub">The relationship survives closing and reopening the document.</p>
+      <div class="flow">
+        <span class="flow-node">SharedEntry</span><span class="flow-arrow">→</span>
+        <span class="flow-node">encode_shared_entry</span><span class="flow-arrow">→</span>
+        <span class="flow-node">share_animations param</span><span class="flow-arrow">→</span>
+        <span class="flow-node">reload + rebuild</span><span class="flow-arrow">→</span>
+        <span class="flow-node">reattach</span>
+      </div>
+      <p style="font-size:0.9rem; opacity:0.86;">Sharing metadata is serialized through the single <code>param_share_animations</code> string. Each entry records target parameter, delay and order. On load or parameter change, <code>rebuild_shared_entries_from_param()</code> parses the structural data, reuses live node handles where possible, resolves new entries, severs relationships that disappeared, and reattaches the current set.</p>
+    </div>
+
+    <div class="media-slot">
+      <div class="media-inner">
+        <span class="media-label">Architecture image</span>
+        <strong>Share creation / persistence diagram</strong>
+        <p>Place the diagram beginning with <code>resolve_and_export_node</code> and ending with the per-glyph <code>TimeOffset</code> wrappers here.</p>
+      </div>
+    </div>
+
+    <div class="diagram">
+      <h3>Workflow D · Runtime time evaluation (<code>set_time_vfunc</code>)</h3>
+      <p class="diag-sub">Staggering is evaluated as time, not duplicated keyframes.</p>
+      <div class="flow">
+        <span class="flow-node">group time</span><span class="flow-arrow">→</span>
+        <span class="flow-node">dilation + offset</span><span class="flow-arrow">→</span>
+        <span class="flow-node">base_time</span><span class="flow-arrow">→</span>
+        <span class="flow-node">glyph layer</span><span class="flow-arrow">→</span>
+        <span class="flow-node">TimeOffset wrapper</span>
+      </div>
+      <p style="font-size:0.9rem; opacity:0.86;"><code>set_time_vfunc()</code> first applies the Text Group's own time dilation and offset, then propagates that <code>base_time</code> to glyph layers in the sub-canvas. The per-glyph <code>ValueNode_TimeOffset</code> wrappers shift sampling by the stagger delay, which is why the implementation can reuse one underlying animation rather than copying its keyframes for every glyph.</p>
+    </div>
+
+    <div class="media-slot compact">
+      <div class="media-inner">
+        <span class="media-label">Optional GIF / timeline capture</span>
+        <strong>Make the time shift visible</strong>
+        <p>A short capture of the timeline plus canvas is more useful here than another static diagram: show one source curve and the glyphs following it at different offsets.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     DEVELOPER REFERENCE
+     ============================================================ -->
+<section id="developer-reference" class="on-dark">
+  <div class="wrap-wide">
+    <p class="kicker">for maintainers</p>
+    <h2 class="section-title">Developer Reference</h2>
+    <p class="section-intro">Ownership, method-level responsibility, two real bugs and their fixes, and what to check before calling any of this done.</p>
+
+    <h3 style="margin-top:36px; font-size:1.15rem;">Repository map</h3>
+    <div class="file-list">
+      <div class="file-row"><span class="path">lyr_textgroup.cpp / .h</span><span class="desc">Layer_TextGroup — owns text‑level state, the glyph subcanvas, and sharing bookkeeping.</span></div>
+      <div class="file-row"><span class="path">text_processing.cpp / .h</span><span class="desc">Text decomposition and shaping helpers, kept separate from layer synchronization.</span></div>
+      <div class="file-row"><span class="path">synfig/animshare.cpp / .h</span><span class="desc">AnimShare — the data model for a single sharing entry.</span></div>
+      <div class="file-row"><span class="path">valuenode_animsharelist.cpp / .h</span><span class="desc">ValueNode_AnimShareList — stores the list of sharing entries as structural data.</span></div>
+      <div class="file-row"><span class="path">valuenode_timeoffset.cpp / .h</span><span class="desc">ValueNode_TimeOffset — the runtime per‑glyph temporal wrapper.</span></div>
+      <div class="file-row"><span class="path">ValueNode_Composite</span><span class="desc">Recognizes the AnimShare type; exposes param / delay / order children.</span></div>
+      <div class="file-row"><span class="path">Canvas load / save</span><span class="desc">Serialization support for the sharing configuration.</span></div>
+      <div class="file-row"><span class="path">Studio tree / widget / action files</span><span class="desc">Presentation and editing integration — selectors, tree stores, undo/redo.</span></div>
+    </div>
+
+    <h3 style="margin-top:40px; font-size:1.15rem;">Ownership</h3>
+    <p style="font-size:0.92rem; opacity:0.88;"><b class="accent">Layer_TextGroup</b> owns text‑level state and the glyph subcanvas — when text or layout changes require synchronization, sharing bookkeeping, and applying shared relationships. <b class="accent">Layer_GlyphShape</b> owns the glyph's contour data and its per‑glyph parameters; it's an implementation layer, not meant for direct top‑level use. <b class="accent">AnimShare</b> / <b class="accent">ValueNode_AnimShareList</b> own the persistent sharing configuration. <b class="accent">ValueNode_TimeOffset</b> owns temporal sampling. <b class="accent">Studio</b> owns UI and actions.</p>
+
+    <h3 style="margin-top:40px; font-size:1.15rem;">Layer_TextGroup — key methods</h3>
+    <div class="method-grid">
+      <div class="method"><code>on_canvas_set()</code><p>Initializes or reconnects the share_animations parameter and rebuilds sharing state when the layer attaches to a canvas.</p></div>
+      <div class="method"><code>set_param()</code><p>Separates structural text/layout changes (full resync) from lighter ones — kerning triggers a glyph sync, color updates child glyphs without rebuilding geometry, and a stagger‑seed change rebuilds the permutation.</p></div>
+      <div class="method"><code>sync_glyphs()</code><p>The central structural synchronization path — where text and layout changes become actual glyph layers.</p></div>
+      <div class="method"><code>get_shareable_params()</code><p>Reads the source glyph's dynamic parameter list — the basis for the Studio selector and for validating a requested share.</p></div>
+      <div class="method"><code>share_param()</code><p>Validates a parameter, resolves and exports its source node, creates a SharedEntry, and attaches wrappers.</p></div>
+      <div class="method"><code>unshare_param()</code><p>Removes the bookkeeping entry <em>before</em> detaching glyph wiring — ordering matters, since detach logic can re‑trigger attachment.</p></div>
+      <div class="method"><code>resolve_and_export_node()</code><p>Reuses an already‑wired shared node when one exists; otherwise exports the source glyph's node into the subcanvas under a persistent ID.</p></div>
+      <div class="method"><code>attach_shared_entries()</code><p>Applies every sharing entry to every glyph — computing the ordered time offset, reusing cached wrappers, and preserving pre‑share nodes.</p></div>
+      <div class="method"><code>find_wired_shared_node()</code><p>Finds a TimeOffset‑wrapped source node already wired to a glyph — used when reconstructing sharing from a loaded document.</p></div>
+      <div class="method"><code>apply_shared_entries_from_items()</code><p>Converts serialized AnimShare items into internal bookkeeping, reusing old caches where possible and detaching entries that disappeared.</p></div>
+    </div>
+
+    <h3 style="margin-top:40px; font-size:1.15rem;">Synchronization &amp; preservation</h3>
+    <p style="font-size:0.92rem; opacity:0.88;">The early prototype cleared the entire glyph subcanvas on every text change — destroying any hand‑made animation or connection in the process. The current model tracks existing glyphs and reuses them instead. Before a parameter is replaced with a TimeOffset wrapper, its original node is captured in <code class="mono">pre_share_nodes</code>, so unsharing can restore it. If the shared source node itself disappears mid‑edit, the affected entry is marked invalid rather than silently left dangling.</p>
+
+    <h3 style="margin-top:40px; font-size:1.15rem;">Studio &amp; actions</h3>
+    <p style="font-size:0.92rem; opacity:0.88;"><code class="mono">Widget_ValueBase</code> recognizes the <code class="mono">anim_share_param</code> hint and delegates to <code class="mono">Widget_Sublayer</code>, which builds the selector from the surrounding layer context. <code class="mono">CanvasTreeStore</code> was adjusted to preserve parent ValueDesc context so that selector can find the Text Group and its glyph parameters. Sharing edits route through Synfig's action system rather than direct mutation — direct mutation alone doesn't produce a coherent undo step. Unshare ordering matters here too: remove the bookkeeping entry first, or a reattach can immediately recreate what was just removed.</p>
+
+    <h3 style="margin-top:44px; font-size:1.15rem;">Two bugs, and how they were actually fixed</h3>
+
+    <div class="bug-card">
+      <span class="label">case study</span>
+      <h4>Animate‑mode insertion crash</h4>
+      <p><strong style="color:var(--cream);">What happened —</strong> Inserting the first AnimShare entry while Animate mode was active crashed. The smart dynamic‑list insertion path prepared an ActivepointSetOff against a list that was still empty, because the insertion action hadn't executed yet — index 0 pointed at nothing.</p>
+      <p><strong style="color:var(--cream);">The fix —</strong> AnimShareList membership is structural, so it bypasses the normal animated‑list activepoint handling. <code class="mono">ValueNodeDynamicListInsertSmart</code> gained a narrow special path that performs the ordinary structural insertion and returns before the generic activepoint logic runs — deliberately narrow, since other dynamic‑list types still need the normal animated behavior.</p>
+    </div>
+
+    <div class="bug-card">
+      <span class="label">case study</span>
+      <h4>Frame‑dependent sharing bug</h4>
+      <p><strong style="color:var(--cream);">What happened —</strong> An earlier implementation reconstructed sharing by evaluating the dynamic list at the current animation time. A structural sharing entry could vanish simply because the current frame didn't consider it "active."</p>
+      <p><strong style="color:var(--cream);">The fix —</strong> Sharing membership is structural, not time‑dependent — reconstruction now reads the raw AnimShareList entries directly instead of asking the animated list for its time‑dependent active subset. New entries carry empty timing information on creation, so a share behaves identically whether the user is on frame 0 or frame 400 when the list is edited.</p>
+    </div>
+
+    <h3 style="margin-top:44px; font-size:1.15rem;">Extending it — adding a new shareable parameter</h3>
+    <ol class="step-list">
+      <li><strong>Identify the GlyphShape parameter</strong> you want to expose.</li>
+      <li><strong>Verify it's safe to wrap</strong> in ValueNode_TimeOffset.</li>
+      <li><strong>Expose it</strong> through the Studio selector.</li>
+      <li><strong>Test inverse/editability</strong> if the parameter needs canvas editing.</li>
+      <li><strong>Add serialization and undo tests</strong> before calling it done.</li>
+    </ol>
+
+    <h3 style="margin-top:40px; font-size:1.15rem;">Known failure signatures</h3>
+    <ul class="fail-list">
+      <li>Share disappears at a non‑zero frame</li>
+      <li>First AnimShare insertion crashes in Animate mode</li>
+      <li>Shared Scale can't be dragged in the canvas</li>
+      <li>Animation Offset fails composite inversion</li>
+      <li>Last staggered glyph doesn't finish before the timeline ends</li>
+    </ul>
+
+    <h3 style="margin-top:40px; font-size:1.15rem;">Final verification matrix</h3>
+    <table class="check-table">
+      <thead><tr><th>Area</th><th>What to check</th></tr></thead>
+      <tbody>
+        <tr><td>Functional</td><td>Create Text Group → glyphs → animate one glyph → share Scale → all glyphs follow, with delay.</td></tr>
+        <tr><td>Ordering</td><td>Forward, Reverse, Random — changing the seed changes the order.</td></tr>
+        <tr><td>Timing</td><td>A positive delay produces a later start, never an earlier one.</td></tr>
+        <tr><td>Frame independence</td><td>Share created at frame 0 and at a non‑zero frame both persist and behave identically.</td></tr>
+        <tr><td>Serialization</td><td>Save/reopen preserves Text Group, glyphs, list, delay/order, node IDs, and the resulting animation.</td></tr>
+        <tr><td>Undo/redo</td><td>Add/remove/edit sharing entries across multiple undo/redo cycles — especially the first entry.</td></tr>
+        <tr><td>Editing</td><td>Scale editable in canvas and value editor; Animation Offset through its Vector/Composite path.</td></tr>
+        <tr><td>Text mutation</td><td>Changing text after animation exists preserves glyph data while updating count/layout.</td></tr>
+        <tr><td>Source deletion</td><td>Deleting/invalidating the shared source node leaves no dangling live wrapper.</td></tr>
+        <tr><td>CI</td><td>Clear the remaining Codacy ErrorProne issue in AnimShareList detection; rerun build/checks.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============================================================
+     DEVELOPMENT JOURNEY
+     ============================================================ -->
+<section id="journey" class="on-dark">
+  <div class="wrap">
+    <p class="kicker">how it got here</p>
+    <h2 class="section-title">Development Journey</h2>
+    <p class="section-intro">A milestone timeline rather than a commit dump — the shape of the review process, told by phase.</p>
+
+    <div class="journey">
+      <div class="journey-item">
+        <div class="journey-date">22 May</div>
+        <h4>First major review</h4>
+        <p>Hardcoded font loading, debug printf statements, byte‑oriented UTF‑8 handling, destructive subcanvas clearing, and incorrect stagger‑time propagation — all prototype‑stage issues. These threads are resolved and now outdated.</p>
+      </div>
+      <div class="journey-item">
+        <div class="journey-date">30 June</div>
+        <h4>Maintainer feedback</h4>
+        <p>Use of <code class="mono">Canvas::get_root()</code>, trailing‑space cleanup, an unused guard, a C++ reserved‑identifier concern, and keeping helper APIs appropriately private.</p>
+      </div>
+      <div class="journey-item">
+        <div class="journey-date">21 July</div>
+        <h4>Translation maintenance</h4>
+        <p><code class="mono">text_processing.cpp</code> added to <code class="mono">POTFILES.in</code>; unnecessary header includes flagged.</p>
+      </div>
+      <div class="journey-item">
+        <div class="journey-date">16 August</div>
+        <h4>Style review</h4>
+        <p><code class="mono">enum class</code> usage, reference‑marker placement, spacing, and method formatting.</p>
+      </div>
+      <div class="journey-item">
+        <div class="journey-date">Late August</div>
+        <h4>The engineering phase that mattered most</h4>
+        <p>AnimShare entries made non‑animated; sharing reconstruction fixed to read the structural list; the Studio AnimShare parameter dropdown shipped; new files wired into the build system; obsolete global stagger controls removed.</p>
+      </div>
+      <div class="journey-item">
+        <div class="journey-date">30 August</div>
+        <h4>Scale metadata request</h4>
+        <p>The maintainer asked for the distance flag to be removed from Scale.</p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================================================
+     DEMO
+     ============================================================ -->
+<div class="smile-divider on-dark" aria-hidden="true">
+  <svg viewBox="0 0 500 140" fill="none">
+    <path d="M20 20 C120 130 380 130 480 20" stroke="#854F6C" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+    <g fill="#854F6C" opacity="0.45">
+      <g transform="translate(74.7,62.1) rotate(29)"><path d="M-14,0 L14,0 L0,22 Z"/></g>
+      <g transform="translate(139.6,87.9) rotate(16)"><path d="M-14,0 L14,0 L0,22 Z"/></g>
+      <g transform="translate(212.3,100.9) rotate(5)"><path d="M-14,0 L14,0 L0,22 Z"/></g>
+      <g transform="translate(287.7,100.9) rotate(-5)"><path d="M-14,0 L14,0 L0,22 Z"/></g>
+      <g transform="translate(360.4,87.9) rotate(-16)"><path d="M-14,0 L14,0 L0,22 Z"/></g>
+      <g transform="translate(425.3,62.1) rotate(-29)"><path d="M-14,0 L14,0 L0,22 Z"/></g>
+    </g>
+  </svg>
+</div>
+
+<section id="demo" class="on-dark">
+  <div class="wrap">
+    <p class="kicker">the storyboard</p>
+    <h2 class="section-title">Demo</h2>
+    <p class="section-intro">One continuous sequence, each moment paired with the mechanism behind it — the same reel works as portfolio material and as technical evidence.</p>
+
+    <div class="storyboard">
+      <div class="scene"><span class="num">1</span><div><h4>The surface</h4><p>Clean title text. A few letters twitch, subtly, on their own.</p><span class="tag">Independent glyph transforms</span></div></div>
+      <div class="scene"><span class="num">2</span><div><h4>First cracks</h4><p>The text drifts and rotates. It becomes clear the letters aren't one rigid object.</p><span class="tag">Non‑shared rotation</span></div></div>
+      <div class="scene"><span class="num">3</span><div><h4>The hole</h4><p>The word approaches a rabbit‑hole motif and breaks apart into individual glyphs.</p><span class="tag">Glyph decomposition</span></div></div>
+      <div class="scene"><span class="num">4</span><div><h4>The fall</h4><p>Glyphs fall in a staggered wave — different delay and order settings make the sequence visibly uneven, on purpose.</p><span class="tag">Delay &amp; order</span></div></div>
+      <div class="scene"><span class="num">5</span><div><h4>The swirl</h4><p>Random‑order letters swirl through the scene — the same seed, run again, would swirl identically.</p><span class="tag">Random seed</span></div></div>
+      <div class="scene"><span class="num">6</span><div><h4>Reassembly</h4><p>The glyphs converge and assemble into a new word or project title.</p><span class="tag">Reassembly</span></div></div>
+      <div class="scene"><span class="num">7</span><div><h4>One breath, together</h4><p>A short synchronized scale/rotation pulse — proof the letters can still share one underlying animation when asked to.</p><span class="tag">Shared animation</span></div></div>
+    </div>
+
+    <div class="media-slot video-slot">
+      <div class="media-inner">
+        <span class="media-label">Final demo video · 16:9</span>
+        <strong>Full feature demonstration</strong>
+        <p>Replace this block with a local <code>&lt;video controls&gt;</code> or an embedded hosted video after the final recording is ready.</p>
+      </div>
+    </div>
+
+    <div class="end-card">
+      <h3>Per‑Character Text Animation — Synfig</h3>
+      <p>PR #3742 · github.com/synfig/synfig</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     LIMITATIONS
+     ============================================================ -->
+<section class="on-dark">
+  <div class="wrap">
+    <p class="kicker">honest accounting</p>
+    <h2 class="section-title">What this isn't, yet</h2>
+    <p class="section-intro">Claims this documentation deliberately avoids making, until they've been verified.</p>
+    <ul class="limit-list">
+      <li><b>Universal script support</b> isn't claimed just because HarfBuzz is present — only scripts that have actually been tested are described as supported.</li>
+      <li><b>A rendering‑speed improvement</b> isn't claimed from the anecdotal observation that older animations looked smoother after Studio integration. That's useful validation, not a benchmark.</li>
+      <li><b>Animation Offset canvas editing</b> isn't described as fully solved until Vector/Composite inversion is verified.</li>
+      <li><b>A staggered animation finishing</b> at the source animation's end time isn't assumed — the final glyph may still be in flight, and any demo timeline needs to include that tail.</li>
+      <li><b>A new global stagger architecture</b> wasn't introduced late in the project — the design intentionally keeps per‑entry delay/order plus a single Text Group seed.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================
+     LINKS
+     ============================================================ -->
+<section id="links" class="on-light">
+  <div class="wrap">
+    <p class="kicker">source &amp; further reading</p>
+    <h2 class="section-title">Links</h2>
+    <div class="link-grid">
+      <div class="link-row"><span class="label">Pull request #3742</span><a href="https://github.com/synfig/synfig/pull/3742" target="_blank" rel="noopener">github.com/synfig/synfig/pull/3742</a></div>
+      <div class="link-row"><span class="label">Working branch</span><a href="https://github.com/XYuktaaa/synfig/tree/GSoC26-text-animation" target="_blank" rel="noopener">github.com/XYuktaaa/synfig/tree/GSoC26-text-animation</a></div>
+      <div class="link-row"><span class="label">Text Group source</span><a href="https://github.com/XYuktaaa/synfig/blob/937984a2c22ce364e603049fe2bcfc0e62ad0750/synfig-core/src/modules/lyr_freetype/lyr_textgroup.cpp" target="_blank" rel="noopener">lyr_textgroup.cpp</a></div>
+    </div>
+  </div>
+</section>
+
+<footer class="on-light">
+  <p class="fmark">Per‑Character Text Animation — Synfig · Google Summer of Code 2026</p>
+</footer>
+
+<script>
+(function(){
+    document.querySelectorAll('.letterize').forEach(function(el){
+    var text = el.textContent;
+    el.textContent = '';
+    var i = 0;
+    text.split('').forEach(function(ch){
+      if(ch === ' '){
+        el.appendChild(document.createTextNode(' '));
+      } else {
+        var span = document.createElement('span');
+        span.className = 'pchar';
+        span.textContent = ch;
+        span.style.animationDelay = (i * 0.045) + 's';
+        el.appendChild(span);
+        i++;
+      }
+    });
+  });
+
+  
+  var toggle = document.getElementById('navToggle');
+  var links = document.getElementById('navLinks');
+  var siteNav = document.getElementById('siteNav');
+  if(toggle && siteNav){
+    toggle.addEventListener('click', function(){
+      var open = siteNav.classList.toggle('open');
+      toggle.setAttribute('aria-expanded', open ? 'true':'false');
+      toggle.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+    });
+    links.querySelectorAll('a').forEach(function(a){
+      a.addEventListener('click', function(){
+        siteNav.classList.remove('open');
+        toggle.setAttribute('aria-expanded','false');
+        toggle.setAttribute('aria-label','Open navigation');
+      });
+    });
+  }
+
+  
+  document.querySelectorAll('.media-carousel').forEach(function(carousel){
+    var slides = Array.prototype.slice.call(carousel.querySelectorAll('.media-slide'));
+    var dots = Array.prototype.slice.call(carousel.querySelectorAll('.media-dot'));
+    var current = 0;
+    function show(index){
+      current = (index + slides.length) % slides.length;
+      slides.forEach(function(slide,i){ slide.classList.toggle('active', i === current); });
+      dots.forEach(function(dot,i){ dot.classList.toggle('active', i === current); });
+    }
+    carousel.querySelector('.media-prev').addEventListener('click', function(){ show(current - 1); });
+    carousel.querySelector('.media-next').addEventListener('click', function(){ show(current + 1); });
+    dots.forEach(function(dot,i){ dot.addEventListener('click', function(){ show(i); }); });
+  });
+
+  // scrollspy
+  var sections = ['overview','user-guide','architecture','developer-reference','journey','demo','links']
+    .map(function(id){ return document.getElementById(id); }).filter(Boolean);
+  var navAnchors = Array.prototype.slice.call(document.querySelectorAll('.nav-links a'));
+
+  function onScroll(){
+    var y = window.scrollY + window.innerHeight * 0.3;
+    var current = sections[0];
+    sections.forEach(function(sec){ if(sec.offsetTop <= y) current = sec; });
+    navAnchors.forEach(function(a){
+      a.classList.toggle('active', a.getAttribute('href') === '#' + current.id);
+    });
+
+    // thread progress
+    var doc = document.documentElement;
+    var scrollPct = window.scrollY / (doc.scrollHeight - window.innerHeight);
+    scrollPct = Math.max(0, Math.min(1, scrollPct));
+    document.getElementById('thread').style.setProperty('--thread-progress', (scrollPct*100) + '%');
+  }
+  document.addEventListener('scroll', onScroll, { passive:true });
+  onScroll();
+})();
+</script>
+</body>
+</html>
